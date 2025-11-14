@@ -6,9 +6,45 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function extractVideoId(url: string): string | null {
-  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-  const match = url.match(regex);
-  return match ? match[1] : null;
+  // Try YouTube first
+  const youtubeRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  const youtubeMatch = url.match(youtubeRegex);
+  if (youtubeMatch) {
+    return youtubeMatch[1];
+  }
+
+  // Try Bilibili
+  const bilibiliPatterns = [
+    // BV format: https://www.bilibili.com/video/BV1xx411c7mD
+    /bilibili\.com\/video\/(BV[a-zA-Z0-9]+)/i,
+    // AV format: https://www.bilibili.com/video/av170001
+    /bilibili\.com\/video\/av(\d+)/i,
+    // Short URL: https://b23.tv/BV1xx411c7mD
+    /b23\.tv\/(BV[a-zA-Z0-9]+)/i,
+    // Mobile URL: https://m.bilibili.com/video/BV1xx411c7mD
+    /m\.bilibili\.com\/video\/(BV[a-zA-Z0-9]+)/i,
+  ];
+
+  for (const pattern of bilibiliPatterns) {
+    const bilibiliMatch = url.match(pattern);
+    if (bilibiliMatch) {
+      return bilibiliMatch[1];
+    }
+  }
+
+  return null;
+}
+
+export function detectPlatform(url: string): 'youtube' | 'bilibili' | null {
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    return 'youtube';
+  }
+
+  if (url.includes('bilibili.com') || url.includes('b23.tv')) {
+    return 'bilibili';
+  }
+
+  return null;
 }
 
 export function formatDuration(seconds: number): string {

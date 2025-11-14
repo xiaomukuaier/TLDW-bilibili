@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { RightColumnTabs, type RightColumnTabsHandle } from "@/components/right-column-tabs";
-import { YouTubePlayer } from "@/components/youtube-player";
+import { VideoPlayer } from "@/components/video-player";
 import { HighlightsPanel } from "@/components/highlights-panel";
 import { ThemeSelector } from "@/components/theme-selector";
 import { LoadingContext } from "@/components/loading-context";
@@ -10,7 +10,7 @@ import { LoadingTips } from "@/components/loading-tips";
 import { VideoSkeleton } from "@/components/video-skeleton";
 import Link from "next/link";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { Topic, TranscriptSegment, VideoInfo, Citation, PlaybackCommand, Note, NoteSource, NoteMetadata, TopicCandidate, TopicGenerationMode } from "@/lib/types";
+import { Topic, TranscriptSegment, VideoInfo, Citation, PlaybackCommand, Note, NoteSource, NoteMetadata, TopicCandidate, TopicGenerationMode, VideoPlatform } from "@/lib/types";
 import { normalizeWhitespace } from "@/lib/quote-matcher";
 import { hydrateTopicsWithTranscript, normalizeTranscript } from "@/lib/topic-utils";
 import { SelectionActionPayload, EXPLAIN_SELECTION_EVENT } from "@/components/selection-actions";
@@ -21,7 +21,7 @@ import { useModePreference } from "@/lib/hooks/use-mode-preference";
 // Page state for better UX
 type PageState = 'IDLE' | 'ANALYZING_NEW' | 'LOADING_CACHED';
 type AuthModalTrigger = 'generation-limit' | 'save-video' | 'manual' | 'save-note';
-import { extractVideoId } from "@/lib/utils";
+import { extractVideoId, detectPlatform } from "@/lib/utils";
 import { useElapsedTimer } from "@/lib/hooks/use-elapsed-timer";
 import { Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -31,9 +31,9 @@ import { backgroundOperation, AbortManager } from "@/lib/promise-utils";
 import { toast } from "sonner";
 import { buildSuggestedQuestionFallbacks } from "@/lib/suggested-question-fallback";
 
-const GUEST_LIMIT_MESSAGE = "You've used today's free analysis. Sign in to keep going.";
-const AUTH_LIMIT_MESSAGE = "You get 5 videos per day. Come back tomorrow.";
-const DEFAULT_CLIENT_ERROR = "Something went wrong. Please try again.";
+const GUEST_LIMIT_MESSAGE = "您已用完今日免费分析次数。请登录以继续使用。";
+const AUTH_LIMIT_MESSAGE = "您每天可以分析5个视频。请明天再来。";
+const DEFAULT_CLIENT_ERROR = "出现错误，请重试。";
 
 function normalizeErrorMessage(message: string | undefined, fallback: string = DEFAULT_CLIENT_ERROR): string {
   const trimmed = typeof message === "string" ? message.trim() : "";
@@ -44,7 +44,7 @@ function normalizeErrorMessage(message: string | undefined, fallback: string = D
     normalizedSource.includes("user aborted request") ||
     normalizedSource.includes("unsupported transcript language")
   ) {
-    return "Only YouTube videos with English transcripts are supported right now. Please choose a video that has English captions enabled.";
+    return "目前仅支持带有中文字幕的视频。请选择启用了中文字幕的视频。";
   }
 
   return baseMessage;
@@ -101,6 +101,7 @@ export default function AnalyzePage() {
   const [error, setError] = useState("");
   const [isRateLimitError, setIsRateLimitError] = useState(false);
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<VideoPlatform>('youtube');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [videoPreview, setVideoPreview] = useState<string>("");
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
@@ -287,7 +288,7 @@ export default function AnalyzePage() {
           console.log('Link video response:', data);
           // Only show toast for newly linked videos, not already linked ones
           if (!data.alreadyLinked) {
-            toast.success('Video saved to your library!');
+            toast.success('视频已保存到您的库中！');
           }
           sessionStorage.removeItem('pendingVideoId');
         } else if (response.status === 404 && retryCount < 3) {
@@ -368,7 +369,7 @@ export default function AnalyzePage() {
   useEffect(() => {
     if (!authErrorParam || !routeVideoId) return;
 
-    toast.error(`Authentication failed: ${decodeURIComponent(authErrorParam)}`);
+    toast.error(`认证失败: ${decodeURIComponent(authErrorParam)}`);
 
     const params = new URLSearchParams(searchParams.toString());
     params.delete('auth_error');
@@ -419,8 +420,9 @@ export default function AnalyzePage() {
     const currentRemaining = rateLimitInfo.remaining;
     try {
       const extractedVideoId = extractVideoId(url);
-      if (!extractedVideoId) {
-        throw new Error("Invalid YouTube URL");
+      const detectedPlatform = detectPlatform(url);
+      if (!extractedVideoId || !detectedPlatform) {
+        throw new Error("无效的视频URL。请提供YouTube或Bilibili链接。");
       }
 
       // Cleanup any pending requests from previous analysis
@@ -467,6 +469,7 @@ export default function AnalyzePage() {
       if (videoId !== extractedVideoId) {
         setVideoId(extractedVideoId);
       }
+      setPlatform(detectedPlatform);
 
       // Check cache first before fetching transcript/metadata
       const cacheResponse = await fetch("/api/check-video-cache", {
@@ -557,7 +560,7 @@ export default function AnalyzePage() {
 
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-                const message = buildApiErrorMessage(errorData, "Failed to generate themes");
+                const message = buildApiErrorMessage(errorData, "生成主题失败");
                 throw new Error(message);
               }
 
@@ -617,12 +620,12 @@ export default function AnalyzePage() {
                   return generatedTakeaways;
                 } else {
                   const errorData = await summaryRes.json().catch(() => ({ error: "Unknown error" }));
-                  const message = buildApiErrorMessage(errorData, "Failed to generate takeaways");
+                  const message = buildApiErrorMessage(errorData, "生成总结失败");
                   throw new Error(message);
                 }
               },
               (error) => {
-                setTakeawaysError(error.message || "Failed to generate takeaways. Please try again.");
+                setTakeawaysError(error.message || "生成总结失败，请重试。");
               }
             ).finally(() => {
               setIsGeneratingTakeaways(false);
@@ -667,9 +670,9 @@ export default function AnalyzePage() {
         signal: transcriptController.signal,
       }).catch(err => {
         if (err.name === 'AbortError') {
-          throw new Error("Transcript request timed out. Please try again.");
+          throw new Error("字幕请求超时，请重试。");
         }
-        throw new Error("Network error: Unable to fetch transcript. Please ensure the server is running.");
+        throw new Error("网络错误：无法获取字幕。请确保服务器正在运行。");
       });
 
       const videoInfoPromise = fetch("/api/video-info", {
@@ -707,9 +710,9 @@ export default function AnalyzePage() {
         fetchedTranscript = data.transcript;
       } catch (jsonError) {
         if (jsonError instanceof Error && jsonError.name === 'AbortError') {
-          throw new Error("Transcript processing timed out. The video may be too long. Please try again.");
+          throw new Error("字幕处理超时。视频可能过长，请重试。");
         }
-        throw new Error("Failed to process transcript data. Please try again.");
+        throw new Error("处理字幕数据失败，请重试。");
       }
 
       const normalizedTranscriptData = normalizeTranscript(fetchedTranscript);
@@ -793,9 +796,9 @@ export default function AnalyzePage() {
         signal: topicsController.signal,
       }).catch(err => {
         if (err.name === 'AbortError') {
-          throw new Error("Topic generation was canceled or interrupted. Please try again.");
+          throw new Error("主题生成被取消或中断，请重试。");
         }
-        throw new Error("Network error: Unable to generate topics. Please check your connection.");
+        throw new Error("网络错误：无法生成主题。请检查您的连接。");
       });
 
       // Start takeaways generation in parallel (will be ignored if cached)
@@ -905,14 +908,14 @@ export default function AnalyzePage() {
           generatedTakeaways = summaryData.summaryContent;
         } else {
           const errorData = await summaryRes.json().catch(() => ({ error: "Unknown error" }));
-          takeawaysGenerationError = buildApiErrorMessage(errorData, "Failed to generate takeaways. Please try again.");
+          takeawaysGenerationError = buildApiErrorMessage(errorData, "生成总结失败，请重试。");
         }
       } else {
         const error = takeawaysResult.reason;
         if (error && error.name === 'AbortError') {
-          takeawaysGenerationError = "Takeaways generation timed out. The video might be too long.";
+          takeawaysGenerationError = "总结生成超时。视频可能过长。";
         } else {
-          takeawaysGenerationError = error?.message || "Failed to generate takeaways. Please try again.";
+          takeawaysGenerationError = error?.message || "生成总结失败，请重试。";
         }
       }
 
@@ -969,13 +972,13 @@ export default function AnalyzePage() {
 
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-            const message = buildApiErrorMessage(errorData, "Failed to save analysis");
+            const message = buildApiErrorMessage(errorData, "保存分析失败");
             throw new Error(message);
           }
         },
         (error) => {
           console.error('Failed to save analysis to database:', error);
-          toast.error('Unable to save video analysis. Your results are still visible.');
+          toast.error('无法保存视频分析。您的结果仍然可见。');
         }
       );
 
@@ -1045,7 +1048,7 @@ export default function AnalyzePage() {
               });
 
               if (!updateRes.ok && updateRes.status !== 404) {
-                throw new Error('Failed to update suggested questions');
+                throw new Error('更新建议问题失败');
               }
             }
           );
@@ -1278,7 +1281,7 @@ export default function AnalyzePage() {
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-          const message = buildApiErrorMessage(errorData, "Failed to generate themed topics");
+          const message = buildApiErrorMessage(errorData, "生成主题化主题失败");
           throw new Error(message);
         }
 
@@ -1312,7 +1315,7 @@ export default function AnalyzePage() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : "Failed to generate themed topics";
+        const message = error instanceof Error ? error.message : "生成主题化主题失败";
         console.error("Theme-specific generation failed:", error);
         if (selectedThemeRef.current === normalizedTheme) {
           resetToDefault({ preserveError: true });
@@ -1355,7 +1358,7 @@ export default function AnalyzePage() {
       setSelectedTopic(themedTopics[0]);
       setThemeError(null);
     } else {
-      setThemeError("No highlights available for this theme yet.");
+      setThemeError("此主题暂无可用精彩片段。");
       setSelectedTopic(null);
     }
   }, [
@@ -1450,10 +1453,10 @@ export default function AnalyzePage() {
         metadata: metadata ?? undefined,
       });
       setNotes((prev) => [note, ...prev]);
-      toast.success("Note saved");
+      toast.success("笔记已保存");
     } catch (error) {
       console.error("Failed to save note", error);
-      toast.error("Failed to save note");
+      toast.error("保存笔记失败");
     }
   }, [videoId, user, promptSignInForNotes]);
 
@@ -1515,16 +1518,16 @@ export default function AnalyzePage() {
           )}
           <Card className="w-full max-w-2xl border border-dashed border-slate-200 bg-white/80 p-9 backdrop-blur-sm">
             <div className="space-y-3">
-              <h2 className="text-xl font-semibold text-slate-900">Ready to analyze a video?</h2>
+              <h2 className="text-xl font-semibold text-slate-900">准备分析视频？</h2>
               <p className="text-xs leading-relaxed text-slate-600">
-                Head back to the home page to paste a YouTube link and generate highlight reels, searchable transcripts, and AI takeaways.
+                返回首页粘贴视频链接，生成精彩片段、可搜索的字幕和AI总结。
               </p>
               <div className="pt-1">
                 <Link
                   href="/"
                   className="inline-flex items-center justify-center rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-[#f8fafc]"
                 >
-                  Go to home
+                  返回首页
                 </Link>
               </div>
             </div>
@@ -1551,12 +1554,12 @@ export default function AnalyzePage() {
           )}
           <div className="flex flex-col items-center text-center">
             <Loader2 className="mb-3.5 h-7 w-7 animate-spin text-primary" />
-            <p className="text-sm font-medium text-slate-700">Analyzing video and generating highlight reels</p>
+            <p className="text-sm font-medium text-slate-700">正在分析视频并生成精彩片段</p>
             <p className="mt-1.5 text-xs text-slate-500">
-              {loadingStage === 'fetching' && 'Fetching transcript...'}
-              {loadingStage === 'understanding' && 'Fetching transcript...'}
-              {loadingStage === 'generating' && `Creating highlight reels... (${elapsedTime} seconds)`}
-              {loadingStage === 'processing' && `Processing and matching quotes... (${processingElapsedTime} seconds)`}
+              {loadingStage === 'fetching' && '正在获取字幕...'}
+              {loadingStage === 'understanding' && '正在获取字幕...'}
+              {loadingStage === 'generating' && `正在创建精彩片段... (${elapsedTime} 秒)`}
+              {loadingStage === 'processing' && `正在处理和匹配引用... (${processingElapsedTime} 秒)`}
             </p>
           </div>
           <div className="mt-10 w-full max-w-2xl">
@@ -1577,7 +1580,7 @@ export default function AnalyzePage() {
             <div className="space-y-4">
               <div>
                 <h2 className="text-xl font-semibold text-slate-900">
-                  {isRateLimitError ? 'Daily limit reached' : 'We couldn\'t finish analyzing this video'}
+                  {isRateLimitError ? '达到每日限制' : '无法完成视频分析'}
                 </h2>
                 <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
                   {isRateLimitError
@@ -1590,7 +1593,7 @@ export default function AnalyzePage() {
                   href="/"
                   className="inline-flex items-center justify-center rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 transition hover:bg-[#f8fafc]"
                 >
-                  Go to home
+                  返回首页
                 </Link>
                 {!isRateLimitError && (
                   <button
@@ -1599,7 +1602,7 @@ export default function AnalyzePage() {
                     className="inline-flex items-center justify-center rounded-full bg-slate-900 px-4 py-2 text-xs font-medium text-white transition hover:bg-slate-800 disabled:pointer-events-none disabled:opacity-50"
                     disabled={isModeLoading}
                   >
-                    Try again
+                    重试
                   </button>
                 )}
               </div>
@@ -1619,7 +1622,8 @@ export default function AnalyzePage() {
             {/* Left Column - Video (2/3 width) */}
             <div className="lg:col-span-2">
               <div className="sticky top-[6.5rem] space-y-3.5" id="video-container">
-                <YouTubePlayer
+                <VideoPlayer
+                  platform={platform}
                   videoId={videoId}
                   selectedTopic={selectedTopic}
                   playbackCommand={playbackCommand}

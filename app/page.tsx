@@ -104,7 +104,7 @@ function HomeContent() {
     (url: string) => {
       const videoId = extractVideoId(url);
       if (!videoId) {
-        toast.error("Please enter a valid YouTube URL");
+        toast.error("请输入有效的视频URL");
         return;
       }
 

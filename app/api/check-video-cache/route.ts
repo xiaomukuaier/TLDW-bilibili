@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { extractVideoId } from '@/lib/utils';
+import { extractVideoId, detectPlatform } from '@/lib/utils';
 import { withSecurity, SECURITY_PRESETS } from '@/lib/security-middleware';
 
 async function handler(req: NextRequest) {
@@ -9,7 +9,15 @@ async function handler(req: NextRequest) {
 
     if (!url) {
       return NextResponse.json(
-        { error: 'URL is required' },
+        { error: 'URL是必需的' },
+        { status: 400 }
+      );
+    }
+
+    const platform = detectPlatform(url);
+    if (!platform) {
+      return NextResponse.json(
+        { error: '不支持的视频平台。请提供YouTube或Bilibili链接。' },
         { status: 400 }
       );
     }
@@ -18,7 +26,7 @@ async function handler(req: NextRequest) {
     const videoId = extractVideoId(url);
     if (!videoId) {
       return NextResponse.json(
-        { error: 'Invalid YouTube URL' },
+        { error: `无效的${platform === 'youtube' ? 'YouTube' : 'Bilibili'} URL` },
         { status: 400 }
       );
     }
@@ -28,12 +36,28 @@ async function handler(req: NextRequest) {
     // Get current user if logged in
     const { data: { user } } = await supabase.auth.getUser();
 
-    // Check for cached video
-    const { data: cachedVideo } = await supabase
-      .from('video_analyses')
-      .select('*')
-      .eq('youtube_id', videoId)
-      .single();
+    // Check for cached video based on platform
+    let cachedVideo: any = null;
+    let videoTable = '';
+
+    if (platform === 'youtube') {
+      const { data } = await supabase
+        .from('video_analyses')
+        .select('*')
+        .eq('youtube_id', videoId)
+        .single();
+      cachedVideo = data;
+      videoTable = 'video_analyses';
+    } else {
+      // Bilibili platform
+      const { data } = await supabase
+        .from('bilibili_video_analyses')
+        .select('*')
+        .or(`bvid.eq.${videoId},aid.eq.${videoId}`)
+        .single();
+      cachedVideo = data;
+      videoTable = 'bilibili_video_analyses';
+    }
 
     if (cachedVideo && cachedVideo.topics) {
       // If user is logged in, track their access to this video
@@ -53,6 +77,7 @@ async function handler(req: NextRequest) {
       return NextResponse.json({
         cached: true,
         videoId: videoId,
+        platform,
         topics: cachedVideo.topics,
         transcript: cachedVideo.transcript,
         videoInfo: {
@@ -70,13 +95,14 @@ async function handler(req: NextRequest) {
     // Video not cached
     return NextResponse.json({
       cached: false,
-      videoId: videoId
+      videoId: videoId,
+      platform
     });
 
   } catch (error) {
     console.error('Error checking video cache:', error);
     return NextResponse.json(
-      { error: 'Failed to check video cache' },
+      { error: '检查视频缓存失败' },
       { status: 500 }
     );
   }

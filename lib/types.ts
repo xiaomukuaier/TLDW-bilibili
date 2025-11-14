@@ -110,6 +110,32 @@ export interface NoteWithVideo extends Note {
   } | null;
 }
 
+export type VideoPlatform = 'youtube' | 'bilibili';
+
+export interface PlatformVideoInfo {
+  platform: VideoPlatform;
+  videoId: string;
+  title: string;
+  author: string;
+  thumbnail: string;
+  duration: number | null;
+  description?: string;
+  tags?: string[];
+}
+
+export interface VideoAnalysisData {
+  platform: VideoPlatform;
+  videoId: string;
+  title: string;
+  author: string;
+  thumbnailUrl: string;
+  duration: number;
+  transcript: TranscriptSegment[];
+  topics: Topic[];
+  summary?: any;
+  suggestedQuestions?: any;
+}
+
 export interface VideoInfo {
   videoId: string;
   title: string;
